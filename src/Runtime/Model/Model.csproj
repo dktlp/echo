@@ -1,0 +1,9 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netcoreapp1.1</TargetFramework>
+    <AssemblyName>Echo.Runtime.Model</AssemblyName>
+    <RootNamespace>Echo.Runtime.Model</RootNamespace>
+  </PropertyGroup>
+
+</Project>
