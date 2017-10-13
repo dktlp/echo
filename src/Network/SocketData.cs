@@ -9,10 +9,8 @@ namespace Echo.Network
     public class SocketData
     {
         public MemoryStream Header { get; private set; }
-        public MemoryStream Content { get; private set; }
+        public MemoryStream Data { get; private set; }
         public SocketFrameState State { get; set; }
-        public long ContentLength { get; set; }
-        public long ContentBytesTransfered { get; set; }
 
         public SocketData()
         {
@@ -23,20 +21,23 @@ namespace Echo.Network
         {
             get
             {
-                return Header.Length + Content.Length;
+                return Header.Length + Data.Length;
             }
         }
 
         public void Reset()
         {
+            Reset(SocketFrameState.ReceiveData);
+        }
+
+        public void Reset(SocketFrameState frameState)
+        {
             Header?.Dispose();
-            Content?.Dispose();
+            Data?.Dispose();
 
             Header = new MemoryStream();
-            Content = new MemoryStream();
-            State = SocketFrameState.ReceiveHeaders;
-            ContentLength = 0;
-            ContentBytesTransfered = 0;
+            Data = new MemoryStream();
+            State = frameState;
         }
     }
 }

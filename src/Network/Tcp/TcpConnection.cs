@@ -22,6 +22,14 @@ namespace Echo.Network.Tcp
             }
         }
 
+        public bool IsConnected
+        {
+            get
+            {
+                return Socket.Connected;
+            }
+        }
+
         public TcpConnection(Socket socket)
         {
             Socket = socket;
@@ -32,31 +40,8 @@ namespace Echo.Network.Tcp
             if (data == null)
                 return;
 
-            //Log.DebugFormat("Ready to send data to '{0}'", Socket.RemoteEndPoint);
-
-            //// Build response data to be sent
-            //byte[] data = null;
-            //using (MemoryStream memory = new MemoryStream())
-            //{
-            //    StreamWriter output = new StreamWriter(memory);
-
-            //    output.WriteLine("HTTP/1.1" + response.Status);
-            //    foreach (KeyValuePair<string, string> header in response.Headers)
-            //    {
-            //        output.WriteLine(header.Key + ": " + header.Value);
-            //    }
-            //    output.WriteLine("");
-
-            //    memory.Write(response.Content, 0, response.Content.Length);
-            //    data = memory.ToArray();
-
-            //    output.Close();
-            //}
-
-            //Log.DebugFormat("Data [{0} byte(s)] will be sent to '{1}'", data.Length, Socket.RemoteEndPoint);
-
-            //Socket.Send(data);
-            //Log.InfoFormat("End of transmission [{0} byte(s)] sent to '{1}'", data.Length, Socket.RemoteEndPoint);
+            int count = Socket.Send(data);
+            Log.DebugFormat("TCP data packet [{0} byte(s)] sent to '{1}'", count, Socket.RemoteEndPoint);
         }
 
         public void Close()

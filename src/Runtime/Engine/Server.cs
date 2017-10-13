@@ -11,6 +11,7 @@ using log4net;
 using Echo;
 using Echo.Network;
 using Echo.Network.Tcp;
+using Echo.Runtime.Engine.Protocol;
 
 namespace Echo.Runtime.Engine
 {
@@ -27,8 +28,7 @@ namespace Echo.Runtime.Engine
 
         public ServerState State { get; private set; }
 
-        // TODO !!!!! -> Queue<object>
-        private Queue<object> Messages { get; set; }
+        private Queue<TcpData> TcpDataQueue { get; set; }
         private List<Thread> Threads { get; set; }
         private List<TcpConnection> Connections { get; set; }
         private TcpServer TcpServer { get; set; }
@@ -41,12 +41,12 @@ namespace Echo.Runtime.Engine
             State = ServerState.Unknown;
             Threads = new List<Thread>();
             Connections = new List<TcpConnection>();
-            Messages = new Queue<object>();
+            TcpDataQueue = new Queue<TcpData>();
             ThreadCancellationToken = new CancellationTokenSource();
 
             TcpServer = new TcpServer(new IPEndPoint(IPAddress.Any, SERVER_PORT));
             TcpServer.ConnectionAccepted += OnConnectionAccepted;
-            //TcpServer.RequestReceived += OnRequestReceived;
+            TcpServer.DataReceived += OnDataReceived;
         }
 
         ~Server()
@@ -74,8 +74,8 @@ namespace Echo.Runtime.Engine
                 Connections?.Clear();
                 Connections = null;
                    
-                Messages?.Clear();
-                Messages = null;
+                TcpDataQueue?.Clear();
+                TcpDataQueue = null;
 
                 ThreadCancellationToken?.Dispose();
                 ThreadCancellationToken = null;
@@ -160,24 +160,27 @@ namespace Echo.Runtime.Engine
             ThreadCancellationToken.Token.WaitHandle.WaitOne();
         }
 
-        //private void OnRequestReceived(object sender, TcpRequestEventArgs e)
-        //{
-        //    if (e.Request == null)
-        //        return;
+        private void OnDataReceived(object sender, TcpDataEventArgs e)
+        {
+            if (e.TcpData == null || e.TcpData.Data == null || e.TcpData.RemoteEndpoint == null)
+                return;
+            
+            Log.DebugFormat("TCP data packet '{0}' received from '{1}'", e.TcpData.Id, e.TcpData.RemoteEndpoint);
 
-        //    Log.DebugFormat("Request '{0}' received from '{1}'", e.Request.ID, e.Request.RemoteEndpoint);
-
-        //    lock(SyncLock)
-        //    {
-        //        Messages.Enqueue(e.Request);
-        //        Log.InfoFormat("Request '{0}' queued for processing", e.Request.ID);
-        //    }
-        //}
+            lock (SyncLock)
+            {
+                TcpDataQueue.Enqueue(e.TcpData);
+                Log.InfoFormat("TCP data packet '{0}' queued for processing", e.TcpData.Id);
+            }
+        }
 
         private void OnConnectionAccepted(object sender, TcpConnectionEventArgs e)
         {
-            if (e.AcceptedConnection != null)
-                Connections.Add(e.AcceptedConnection);
+            if (e.AcceptedConnection == null)
+                return;
+
+            SessionManager.GetInstance().NewSession(e.AcceptedConnection);
+            Connections.Add(e.AcceptedConnection);
         }
 
         private void ProcessThread(object state)
@@ -193,92 +196,86 @@ namespace Echo.Runtime.Engine
                 {
                     Thread.Sleep(THREAD_INTERVAL_PROC);
                     lock(SyncLock)
-                        queueLength = Messages.Count;
+                        queueLength = TcpDataQueue.Count;
                 }
 
                 Log.DebugFormat("Process message in queue [length: {0}]", queueLength);
                 if (queueLength >= HTTP_TRAFFIC_WARNING_THRESHOLD)
                     Log.WarnFormat("Traffic on this server is high [queue length: {0}]", queueLength);
-
-                // TODO !!!!
-                object message = null;
+                
+                TcpData tcpData = null;
                 lock(SyncLock)
-                    message = Messages.Dequeue();
+                    tcpData = TcpDataQueue.Dequeue();
 
-                //Log.DebugFormat("Message '{0}' dequeued and ready to be processed.", message.ID);
-                Task.Factory.StartNew(ProcessMessage, message);    
+                Log.DebugFormat("TCP data packet '{0}' dequeued and ready to be processed.", tcpData.Id);
+                Task.Factory.StartNew(ProcessTcpPacket, tcpData);    
             }
 
             Log.InfoFormat("Thread '{0}' stopped", Thread.CurrentThread.Name);
         }
 
-        private void ProcessMessage(object state)
+        private void ProcessTcpPacket(object state)
         {
-            //HttpMessage message = state as HttpMessage;
-            //if (message == null)
-            //    return;
+            TcpData tcpData = state as TcpData;
+            if (tcpData == null)
+                return;
 
-            // Process request message.
-            //if (message is HttpRequest)
-            //{
-            //    Log.InfoFormat("Process request '{0}' -> '{1} {2}' from '{3}'", message.ID, ((HttpRequest)message).Method, ((HttpRequest)message).Uri, message.RemoteEndpoint);
+            Log.InfoFormat("Process TCP data packet '{0}' from '{1}' in direction '{2}'", tcpData.Id, tcpData.RemoteEndpoint, tcpData.Direction);
 
-            //    // TODO: Implement Actions which are executed globally, fx check JWT-token
+            switch (tcpData.Direction)
+            {
+                // Process inbound data
+                case TcpDataDirection.Inbound:
+                    {
+                        try
+                        {
+                            IProtocolAction action = ProtocolActionFactory.Create(tcpData);
+                            if (action == null)
+                                return;
 
-            //    try
-            //    {
-            //        //IAction action = ActionFactory.Create((HttpRequest)message);
-            //        //HttpResponse response = action.Execute((HttpRequest)message);
-            //        //if (response != null)
-            //        //{
-            //        //    lock (SyncLock)
-            //        //    {
-            //        //        Messages.Enqueue(response);
-            //        //        Log.InfoFormat("Response '{0}' queued for processing", response.ID);
-            //        //    }
-            //        //}
-            //    }
-            //    catch (Exception e)
-            //    {
-            //        Log.ErrorFormat("Error occurred while processing request; {0}", e.Message);
-            //    }
-            //    finally
-            //    {
-            //    }
-            //}
+                            // TODO: Consistency check that Action is valid in this context
 
-            //// Process response message.
-            //if (message is HttpResponse)
-            //{
-            //    Log.InfoFormat("Process response '{0}' for '{1}'; result: {2}", message.ID, message.RemoteEndpoint, ((HttpResponse)message).Status);
+                            TcpData tcpResponseData = action.Execute(tcpData);
+                            if (tcpResponseData != null)
+                            {
+                                lock(SyncLock)
+                                    TcpDataQueue.Enqueue(tcpResponseData);
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            Log.ErrorFormat("Error occurred while processing TCP data packet; {0}", e.Message);
+                        }
+                        finally
+                        {
 
-            //    HttpConnection connection = Connections.Find(m => m.RemoteEndpoint == message.RemoteEndpoint);
-            //    if (connection != null)
-            //    {
-            //        try
-            //        {
-            //            connection.Send((HttpResponse)message);
+                        }
+                        
+                        break;
+                    }
+                // Process outbound data
+                case TcpDataDirection.Outbound:
+                    {
+                        TcpConnection connection = Connections.Find(m => m.RemoteEndpoint == tcpData.RemoteEndpoint);
+                        if (connection != null)
+                        {
+                            try
+                            {
+                                connection.Send(tcpData.Data);
+                            }
+                            catch (Exception e)
+                            {
+                                Log.ErrorFormat("Error occurred while processing response; {0}", e.Message);
+                            }
+                        }
+                        else
+                            Log.WarnFormat("Connection for client '{0}' not found", tcpData.RemoteEndpoint);
 
-            //            if (message.Headers.ContainsKey("Connection"))
-            //            {
-            //                if (message.Headers["Connection"] == "close")
-            //                {
-            //                    connection.Close();
-            //                    Connections.Remove(connection);
-            //                }
-            //            }
-            //        }
-            //        catch (Exception e)
-            //        {
-            //            Log.ErrorFormat("Error occurred while processing response; {0}", e.Message);
+                        break;
+                    }
+            }
 
-            //        }
-            //    }
-            //    else
-            //        Log.WarnFormat("Connection for client '{0}' not found", message.RemoteEndpoint);                
-            //}
-
-            //Log.InfoFormat("Processing of message '{0}' complete", message.ID);
+            Log.InfoFormat("Processing of TCP data packet '{0}' complete", tcpData.Id);            
         }
 
         private void GarbageCycleThread(object state)
@@ -292,12 +289,24 @@ namespace Echo.Runtime.Engine
                 Thread.Sleep(THREAD_INTERVAL_GARC);
 
                 Log.Info("Garbage cycle started");
-                
-                // TODO: Write some code here.
-                // Fx, close idle client connections
 
+                // TODO: Detect idle connections.
 
+                // Remove all idle or closed connections.
+                List<TcpConnection> closedConnections = Connections.FindAll(m => !m.IsConnected);
+                foreach (TcpConnection closedConnection in closedConnections)
+                {
+                    Connections.Remove(closedConnection);
 
+                    List<Session> closedSessions = SessionManager.GetInstance().FindAll(m => m.Connection == closedConnection);
+                    foreach (Session closedSession in closedSessions)
+                    {                        
+                        SessionManager.GetInstance().Remove(closedSession);
+                        Log.InfoFormat("Session '{0}' was idle or closed by remote peer", closedSession.Id);
+
+                        // TODO: When a connection is removed, then the corresponding user + channel subscription.
+                    }
+                }
 
                 Log.Info("Garbage cycle completed");
             }

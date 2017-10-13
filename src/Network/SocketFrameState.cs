@@ -6,7 +6,7 @@ namespace Echo.Network
     {
         ReceiveHeaders = 0x01,        
         HeadersReceived = 0x2,
-        ReceiveContent = 0x03,
-        ContentReceived = 0x04
+        ReceiveData = 0x03,
+        DataReceived = 0x04
     }
 }

@@ -22,7 +22,7 @@ namespace Echo.Network.Tcp
         public IPEndPoint LocalEndpoint { get; private set; }
 
         public event EventHandler<TcpConnectionEventArgs> ConnectionAccepted;
-        //public event EventHandler<HttpRequestEventArgs> RequestReceived;
+        public event EventHandler<TcpDataEventArgs> DataReceived;
 
         public TcpServer(IPEndPoint localEndpoint)
         {
@@ -48,7 +48,7 @@ namespace Echo.Network.Tcp
 
         private async Task Listen()
         {
-            Log.Info("Listening for incoming TCP/IP connections");
+            Log.InfoFormat("Listening for incoming TCP/IP connections on port '{0}'", LocalEndpoint.Port);
 
             SocketAsyncEventArgs e = new SocketAsyncEventArgs();
             SocketAwaitable awaitable = new SocketAwaitable(e);
@@ -61,10 +61,8 @@ namespace Echo.Network.Tcp
                 if (e.AcceptSocket != null)
                 {
                     Log.InfoFormat("Connection accepted from '{0}'", e.AcceptSocket.RemoteEndPoint);
+                    ConnectionAccepted?.Invoke(this, new TcpConnectionEventArgs(new TcpConnection(e.AcceptSocket)));
 
-                    if (ConnectionAccepted != null)
-                        ConnectionAccepted(this, new TcpConnectionEventArgs(new TcpConnection(e.AcceptSocket)));
-                    
                     Task.Factory.StartNew(Receive, e.AcceptSocket);
                 }
             }
@@ -76,114 +74,70 @@ namespace Echo.Network.Tcp
             if (socket == null)
                 return;
 
-            //SocketData data = new SocketData();
-            //SocketAsyncEventArgs e = new SocketAsyncEventArgs();
-            //SocketAwaitable awaitable = new SocketAwaitable(e);
+            SocketData socketData = new SocketData() { State = SocketFrameState.ReceiveData };
+            SocketAsyncEventArgs e = new SocketAsyncEventArgs();
+            SocketAwaitable awaitable = new SocketAwaitable(e);
 
-            //e.SetBuffer(new byte[0x1000], 0, 0x1000);
+            e.SetBuffer(new byte[0x1000], 0, 0x1000);
 
-            //while (true)
-            //{
-            //    Log.InfoFormat("Ready to to receive data from connection '{0}'", socket.RemoteEndPoint);
+            while (true)
+            {
+                Log.InfoFormat("Ready to to receive data from connection '{0}'", socket.RemoteEndPoint);
 
-            //    await socket.ReceiveAsync(awaitable);
-            //    bool endOfTransmission = (e.BytesTransferred <= 0);
+                await socket.ReceiveAsync(awaitable);
+                bool endOfTransmission = (e.BytesTransferred <= 0);
 
-            //    Log.DebugFormat("Data [{0} byte(s)] received from from '{1}'", e.BytesTransferred, socket.RemoteEndPoint);
+                Log.DebugFormat("Data [{0} byte(s)] received from from '{1}'", e.BytesTransferred, socket.RemoteEndPoint);
 
-            //    for (int i = 0; (i < e.BytesTransferred && !endOfTransmission); i++)
-            //    {
-            //        switch (data.State)
-            //        {
-            //            case SocketFrameState.ReceiveHeaders:
-            //                {
-            //                    data.Header.WriteByte(e.Buffer[i]);
-            //                    if (e.Buffer[i] == (byte)SocketControlCharacters.EOT)
-            //                        endOfTransmission = true;
+                for (int i = 0; (i < e.BytesTransferred && !endOfTransmission); i++)
+                {
+                    switch (socketData.State)
+                    {                        
+                        case SocketFrameState.ReceiveData:
+                            {
+                                socketData.Data.WriteByte(e.Buffer[i]);
 
-            //                    // Check if transmission of http-headers is complete.
-            //                    if (e.Buffer[i] == (byte)SocketControlCharacters.CR)
-            //                    {
-            //                        byte[] delimiters = new byte[] { (byte)SocketControlCharacters.CR, (byte)SocketControlCharacters.LF, (byte)SocketControlCharacters.CR };
-            //                        byte[] bytes = new byte[delimiters.Length];
-            //                        long pos = data.Header.Position;
+                                // Check if transmission of data is complete.
+                                if (e.Buffer[i] == (byte)SocketControlCharacters.CR || e.Buffer[i] == (byte)SocketControlCharacters.LF)
+                                {
+                                    byte[] delimiters = new byte[] { (byte)SocketControlCharacters.CR, (byte)SocketControlCharacters.LF };
+                                    byte[] bytes = new byte[delimiters.Length];
+                                    long pos = socketData.Data.Position;
 
-            //                        data.Header.Seek(-1 * delimiters.Length, SeekOrigin.Current);
-            //                        data.Header.Read(bytes, 0, bytes.Length);
-            //                        data.Header.Position = pos;
+                                    socketData.Data.Seek(-1 * delimiters.Length, SeekOrigin.Current);
+                                    socketData.Data.Read(bytes, 0, bytes.Length);
+                                    socketData.Data.Position = pos;
 
-            //                        if (delimiters.Length == bytes.Length)
-            //                        {
-            //                            bool headersReceived = true;
-            //                            for (int j = 0; j < delimiters.Length; j++)
-            //                            {
-            //                                if (delimiters[j] != bytes[j])
-            //                                    headersReceived = false;
-            //                            }
+                                    if (delimiters.Length == bytes.Length)
+                                    {
+                                        bool dataReceived = true;
+                                        for (int j = 0; j < delimiters.Length; j++)
+                                        {
+                                            if (delimiters[j] != bytes[j])
+                                                dataReceived = false;
+                                        }
 
-            //                            if (headersReceived)
-            //                                data.State = SocketFrameState.HeadersReceived;
-            //                        }
-            //                    }
+                                        if (dataReceived)
+                                            socketData.State = SocketFrameState.DataReceived;
+                                    }
 
-            //                    // Parse headers to see if there is any body-content to be received.
-            //                    if (data.State == SocketFrameState.HeadersReceived)
-            //                    {
-            //                        Log.DebugFormat("All data headers received from '{0}'", socket.RemoteEndPoint);
+                                    if (e.Buffer[i] == (byte)SocketControlCharacters.EOT || socketData.State == SocketFrameState.DataReceived)
+                                        endOfTransmission = true;
+                                }
 
-            //                        data.Header.Position = 0;
-            //                        StreamReader parser = new StreamReader(data.Header);
-            //                        string l = parser.ReadLine();
-            //                        while (l != null)
-            //                        {
-            //                            if (l.Contains("Content-Length:"))
-            //                            {
-            //                                string[] n = l.Split(':');
-            //                                if (n.Length == 2)
-            //                                    data.ContentLength = long.Parse(n[1].Trim(' '));
+                                break;
+                            }
+                    }
+                }
 
-            //                                break;
-            //                            }
+                if (endOfTransmission)
+                {
+                    Log.InfoFormat("End of transmission [{0} byte(s)] received from '{1}'", socketData.Length, socket.RemoteEndPoint);
+                    DataReceived?.Invoke(this, new TcpDataEventArgs(new TcpData(socketData.Data.ToArray(), socket.RemoteEndPoint)));
 
-            //                            l = parser.ReadLine();
-            //                        }
-
-            //                        if (data.ContentLength == 0)
-            //                            endOfTransmission = true;
-            //                        else
-            //                            data.State = SocketFrameState.ReceiveContent;
-            //                    }
-
-            //                    break;
-            //                }
-            //            case SocketFrameState.ReceiveContent:
-            //                {
-            //                    data.ContentBytesTransfered++;
-            //                    data.Content.WriteByte(e.Buffer[i]);
-
-            //                    if (data.ContentBytesTransfered == data.ContentLength)
-            //                        data.State = SocketFrameState.ContentReceived;
-
-            //                    if (e.Buffer[i] == (byte)SocketControlCharacters.EOT || data.State == SocketFrameState.ContentReceived)
-            //                        endOfTransmission = true;
-
-            //                    break;
-            //                }
-            //        }
-            //    }
-
-            //    if (endOfTransmission)
-            //    {
-            //        Log.InfoFormat("End of transmission [{0} byte(s)] received from '{1}'", data.Length, socket.RemoteEndPoint);
-
-            //        if (RequestReceived != null)
-            //            RequestReceived(this, new HttpRequestEventArgs(new HttpRequest(data.Header.ToArray(), data.Content.ToArray(), socket.RemoteEndPoint)));
-
-            //        data.Reset();
-
-            //        break;
-            //    }
-            //}
+                    socketData.Reset();
+                }
+            }
         }
 
     }

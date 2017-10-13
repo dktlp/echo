@@ -28,10 +28,11 @@ namespace Echo.Server
             {
                 log4net.Config.XmlConfigurator.Configure(LogManager.CreateRepository(Assembly.GetEntryAssembly(), typeof(log4net.Repository.Hierarchy.Hierarchy)), stream);
             }
-
+            
             Log.InfoFormat("Starting runtime model and engine v{0}", Assembly.GetEntryAssembly().GetName().Version);
             Log.InfoFormat("Server process started [PID:{0}]", Process.GetCurrentProcess().Id);
 
+            // TODO: How to handle UnhandledException?
             //AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
             SetConsoleCtrlHandler(new ProcessEventHandler(OnProcessEvent), true);
 
